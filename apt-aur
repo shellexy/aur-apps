@@ -1,0 +1,72 @@
+#!/bin/bash
+# fix the poorly designed pacman/yay command
+
+list()(
+    set -x
+    yay -Sl "$@"
+)
+
+search()(
+    set -x
+    yay -Ss "$@"
+)
+
+show()(
+    set -x
+    yay -Si "$@"
+)
+
+showfiles()(
+    set -x
+    yay -Fl "$@" || yay -Ql "$@"
+)
+
+install()(
+    set -x
+    yay -S "$@"
+)
+
+remove()(
+    set -x
+    yay -Rns "$@"
+)
+
+update()(
+    set -x
+    yay -Sy "$@" && yay -Fy "$@"
+)
+
+upgrade()(
+    set -x
+    yay -Syua "$@" && yay -Fy "$@"
+)
+
+upgradeable()(
+    set -x
+    yay -Pu
+)
+
+files()(
+    set -x
+    yay -F "$@"
+)
+autoclean()(
+    set -x
+    yay -Yc
+)
+
+status()(
+    set -x
+    yay -Ps
+)
+
+help(){
+    echo commands：
+    declare -F | grep -oP ' [a-z]+.*' | sort
+}
+
+if [ "$(type -t $1)" = function ] ; then
+    "$@"
+else
+    help
+fi

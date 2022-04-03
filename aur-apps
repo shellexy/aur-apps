@@ -10,11 +10,88 @@ AUR_APP_DATA_DIR="${ARCH_DIR:-$AUR_DIR/data/}"
 ARCH_DIR="${ARCH_DIR:-$AUR_DIR/root.x86_64/}"
 
 ARCH_IMAGE_MIRROR="${ARCH_IMAGE_MIRROR:-http://mirrors.163.com/archlinux/iso/latest/}"
-MIRRORLIST='https://mirrors.163.com/archlinux/$repo/os/$arch'
-ARCHLINUXCN='https://mirrors.163.com/archlinux-cn/$arch'
+
+#MIRRORLIST='https://mirrors.163.com/archlinux/$repo/os/$arch'
+#ARCHLINUXCN='https://mirrors.163.com/archlinux-cn/$arch'
+MIRRORLIST='http://mirrors.aliyun.com/archlinux/$repo/os/$arch'
+ARCHLINUXCN='https://mirrors.aliyun.com/archlinuxcn/$arch'
 
 AUR_DESKTOP_FILES_DIR="$HOME/.local/share/applications/aur-apps/"
 
+
+APT_AUR='#!/bin/bash
+# fix the poorly designed pacman/yay command
+
+list()(
+    set -x
+    yay -Sl "$@"
+)
+
+search()(
+    set -x
+    yay -Ss "$@"
+)
+
+show()(
+    set -x
+    yay -Si "$@"
+)
+
+showfiles()(
+    set -x
+    yay -Fl "$@" || yay -Ql "$@"
+)
+
+install()(
+    set -x
+    yay -S "$@"
+)
+
+remove()(
+    set -x
+    yay -Rns "$@"
+)
+
+update()(
+    set -x
+    yay -Sy "$@" && yay -Fy "$@"
+)
+
+upgrade()(
+    set -x
+    yay -Syua "$@" && yay -Fy "$@"
+)
+
+upgradeable()(
+    set -x
+    yay -Pu
+)
+
+files()(
+    set -x
+    yay -F "$@"
+)
+autoclean()(
+    set -x
+    yay -Yc
+)
+
+status()(
+    set -x
+    yay -Ps
+)
+
+help(){
+    echo commands：
+    declare -F | grep -oP ' [a-z]+.*' | sort
+}
+
+if [ "$(type -t $1)" = function ] ; then
+    "$@"
+else
+    help
+fi
+'
 
 ## initialize
 init(){
@@ -30,9 +107,12 @@ init(){
     # root.x86_64
     tar xvf "$image_name"
     # setup pacman
-    echo 'Server = http://mirrors.163.com/archlinux/$repo/os/$arch' > root.x86_64/etc/pacman.d/mirrorlist
-    echo -e '\n[archlinuxcn]\nServer = https://mirrors.163.com/archlinux-cn/$arch' >> root.x86_64/etc/pacman.conf
-    echo -e '\n[multilib]\nInclude = /etc/pacman.d/mirrorlist' >> root.x86_64/etc/pacman.conf
+    echo "Server = $MIRRORLIST" >> root.x86_64/etc/pacman.d/mirrorlist
+    echo -e "\n[archlinuxcn]\nServer = $ARCHLINUXCN" >> root.x86_64/etc/pacman.conf
+    echo -e "\n[multilib]\nInclude = /etc/pacman.d/mirrorlist" >> root.x86_64/etc/pacman.conf
+    # fix the poorly designed pacman/run yay command
+    echo "$APT_AUR" > root.x86_64/usr/local/bin/apt-aur
+    chmod +x root.x86_64/usr/local/bin/apt-aur
     # use snapctl xdg-open
     echo -e '#!/bin/sh
 test -a /usr/bin/snapctl && exec snapctl user-open "$@" || exec /usr/bin/xdg-open "$@" ' > root.x86_64/usr/local/bin/xdg-open
@@ -191,6 +271,11 @@ _get_bind_try_args()(
     done
 )
 
+# fix environment variable
+_fix_env(){
+
+}
+
 # run command
 run(){
     bwrap_user "$@"
@@ -255,6 +340,7 @@ help(){
 
 # interactive cmd
 _cmd_main()(
+    _fix_env
     if [ -n "$1" ] ; then
         if [ "$(type -t $1)" = function ] ; then
             "$@"
