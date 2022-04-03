@@ -1,0 +1,286 @@
+#!/bin/bash
+#
+# aur-apps，利用 bwrap 沙盒让 ubuntu 能用 aur 和 archlinuxcn 源安装软件运行
+#
+
+AUR_DIR="${AUR_DIR:-$HOME/.local/lib/aur-apps/}"
+
+AUR_CACHE_DIR="${ARCH_DIR:-$AUR_DIR/cache/}"
+AUR_APP_DATA_DIR="${ARCH_DIR:-$AUR_DIR/data/}"
+ARCH_DIR="${ARCH_DIR:-$AUR_DIR/root.x86_64/}"
+
+ARCH_IMAGE_MIRROR="${ARCH_IMAGE_MIRROR:-http://mirrors.163.com/archlinux/iso/latest/}"
+MIRRORLIST='https://mirrors.163.com/archlinux/$repo/os/$arch'
+ARCHLINUXCN='https://mirrors.163.com/archlinux-cn/$arch'
+
+AUR_DESKTOP_FILES_DIR="$HOME/.local/share/applications/aur-apps/"
+
+
+## initialize
+init(){
+    [ ! -e /usr/bin/bwrap ] && echo "+ sudo apt install bwrap" && sudo apt install bubblewrap
+    mkdir -p "$AUR_DIR"
+    mkdir -p "$AUR_CACHE_DIR/pacman/pkg/"
+    mkdir -p "$AUR_CACHE_DIR/_cache/"
+    mkdir -p "$AUR_APP_DATA_DIR"
+    mkdir -p "$ARCH_DIR/$HOME/.cache"
+    cd "$AUR_DIR"
+    image_name=$(_wget_arch_image)
+    test -n "$image_name" || { echo "can not download the archlinux-bootstrap image file, exit."  ; exit 1 ; }
+    # root.x86_64
+    tar xvf "$image_name"
+    # setup pacman
+    echo 'Server = http://mirrors.163.com/archlinux/$repo/os/$arch' > root.x86_64/etc/pacman.d/mirrorlist
+    echo -e '\n[archlinuxcn]\nServer = https://mirrors.163.com/archlinux-cn/$arch' >> root.x86_64/etc/pacman.conf
+    echo -e '\n[multilib]\nInclude = /etc/pacman.d/mirrorlist' >> root.x86_64/etc/pacman.conf
+    # use snapctl xdg-open
+    echo -e '#!/bin/sh
+test -a /usr/bin/snapctl && exec snapctl user-open "$@" || exec /usr/bin/xdg-open "$@" ' > root.x86_64/usr/local/bin/xdg-open
+    chmod +x root.x86_64/usr/local/bin/xdg-open
+    # init arch
+    # init locale
+    echo zh_CN.UTF-8 UTF-8 >>  root.x86_64/etc/locale.gen
+    bwrap_root locale-gen
+    # fix makepkg, pacman with bwrap
+    sed -i 's/^CheckSpace/##CheckSpace/' root.x86_64/etc/pacman.conf
+    _fix_files
+    # add user
+    bwrap_root useradd -u $(id -u) "$USER"
+    # setup pacman
+    bwrap_root pacman-key --init
+    bwrap_root pacman-key --populate archlinux
+    bwrap_root pacman -Sy
+    bwrap_root pacman -Fy
+    bwrap_root pacman --noconfirm -S fakeroot which
+    bwrap_root cp /usr/bin/fakeroot /usr/local/bin/sudo # use fakeroot as sudo
+    echo "+ sudo arch-chroot"
+    arch_chroot pacman --noconfirm -S archlinuxcn-keyring ; sudo chown -R $USER: "$ARCH_DIR"
+    # makepkg expect base-devel
+    #bwrap_root pacman --noconfirm -S base-devel git make patch yay xdg-desktop-portal-kde  xdg-desktop-portal-gtk extra/breeze-gtk extra/noto-fonts-cjk
+    bwrap_root pacman --noconfirm -S base-devel git make patch yay xdg-desktop-portal-gtk extra/breeze-gtk fcitx fcitx-qt5 fcitx-qt6
+    ##
+    cd -
+}
+
+# fix files
+_fix_files(){
+    grep -q 'EUID == 0' "$ARCH_DIR/usr/bin/makepkg" &&
+        sed -i 's/EUID == 0/EUID == 1/'  "$ARCH_DIR/usr/bin/makepkg"
+}
+
+# like apt list
+list(){
+    bwrap_user yay -Sl "$@"
+}
+
+# like apt search
+search(){
+    bwrap_user yay -Ss "$@"
+}
+
+# like apt show
+show(){
+    bwrap_user yay -Si "$@"
+}
+
+# like apt-file list or dpkg -L
+showfiles(){
+    bwrap_user yay -Fl "$@" || bwrap_user yay -Ql "$@"
+}
+
+# like apt install
+install(){
+    _fix_files
+    bwrap_user yay -S "$@" && update_desktop_menu
+}
+
+# like apt remove
+remove(){
+    _fix_files
+    bwrap_user yay -Rns "$@" && update_desktop_menu
+}
+
+# like apt update
+update(){
+    bwrap_user yay -Sy "$@"  &&  bwrap_root yay -Fy "$@"
+}
+
+# like apt upgrade
+upgrade(){
+    _fix_files
+    bwrap_user yay -Syua "$@" &&  bwrap_root yay -Fy "$@"
+}
+
+# apt list --upgradable
+upgradeable(){
+    bwrap_user yay -Pu
+}
+
+# like apt-file search
+files(){
+    bwrap_user yay -F "$@"
+}
+
+# like apt autoclean
+autoclean(){
+    _fix_files
+    bwrap_root yay -Yc
+}
+
+# like apt policy
+status(){
+    bwrap_user yay -Ps
+}
+
+# download archlinux-bootstrap image
+_wget_arch_image()(
+    image_name=$(wget -O- "$ARCH_IMAGE_MIRROR" | grep -m 1 -oP 'archlinux-bootstrap-20.*?x86_64\.tar\.gz' | head -1)
+    wget -c "$ARCH_IMAGE_MIRROR/$image_name" && echo $image_name
+)
+
+# gen .menu file
+_gen_desktop_file_menu_file(){
+    DIR=$(basename $AUR_DESKTOP_FILES_DIR)
+    echo '<!DOCTYPE Menu PUBLIC "-//freedesktop//DTD Menu 1.0//EN"
+    "http://www.freedesktop.org/standards/menu-spec/menu-1.0.dtd">
+<!-- Do not edit manually - generated and managed by xdg-desktop-menu -->
+<Menu>
+    <Name>Applications</Name>
+<Menu>
+    <Name>aur-apps</Name>
+    <Directory>aur-apps.directory</Directory>
+    <Include>'
+    ls "$AUR_DESKTOP_FILES_DIR" | while read fn ; do
+        echo "        <Filename>$DIR-$fn</Filename>"
+    done
+    echo '    </Include>
+</Menu>
+</Menu>'
+}
+
+# update start menu
+update_desktop_menu(){
+    mkdir -p "$AUR_DESKTOP_FILES_DIR"
+    ln -s "$ARCH_DIR/usr/share/pixmaps/"* ~/.local/share/pixmaps/ 2>/dev/null
+    rm "$AUR_DESKTOP_FILES_DIR"/*
+    cp "$ARCH_DIR/usr/share/applications/"* "$AUR_DESKTOP_FILES_DIR"
+    sed -i 's/Exec=/Exec=aur-apps run /' "$AUR_DESKTOP_FILES_DIR/"*
+    echo '[Desktop Entry]
+Version=1.0
+Type=Directory
+Name=Aur Apps
+Icon=applications-multimedia' > ~/.local/share/desktop-directories/aur-apps.directory
+    _gen_desktop_file_menu_file > ~/.config/menus/applications-merged/aur-apps.menu
+    xdg-desktop-menu  forceupdate
+    xdg-icon-resource forceupdate
+}
+
+_get_bind_try_args()(
+    quote ()
+    {
+        local quoted=${1//\'/\'\\\'\'};
+        printf '%s' "$quoted"
+    }
+    # --bind-try args
+    {
+        for i in DESKTOP DOWNLOAD TEMPLATES PUBLICSHARE DOCUMENTS MUSIC PICTURES VIDEOS ; do xdg-user-dir $i ; done
+    } | while read i
+    do
+        bind_try=$(quote "$i")
+        echo -n " --bind $bind_try $bind_try  "
+    done
+)
+
+# run command
+run(){
+    bwrap_user "$@"
+}
+
+# user bwrap
+bwrap_user()(
+    if [ ! -e "$ARCH_DIR/usr/bin/pacman" ] ; then
+        echo "aur for ubuntu was not initialized, please run init"
+        read -e -p "would you like to initialize now? [Y/n] " ret
+        [ "$ret" = y -o "$ret" = Y ] || exit 1
+        init
+    fi
+    #xdg_open_file=$(ls /snap/core/*/usr/bin/xdg-open | head -1)
+    bind_try_args=`_get_bind_try_args`
+    [ "$1" = which ] || set -x
+    bwrap --bind "$ARCH_DIR" / \
+        --bind-try "$AUR_APP_DATA_DIR" "$HOME" \
+        --bind-try "$AUR_CACHE_DIR/pacman/pkg/" /var/cache/pacman/pkg/ \
+        --bind-try "$AUR_CACHE_DIR/_cache/" "$HOME/.cache" \
+        $bind_try_args \
+        --ro-bind /etc/resolv.conf /etc/resolv.conf --ro-bind /etc/hosts /etc/hosts \
+        --dev-bind /dev /dev --dev-bind /proc /proc --dev-bind /sys /sys --bind /tmp /tmp --dev-bind /run /run \
+        --ro-bind-try /usr/share/fonts/opentype/noto/ /usr/share/fonts/noto \
+        --ro-bind-try /usr/bin/snapctl /usr/bin/snapctl \
+        --ro-bind-try  /usr/share/themes/Yaru /usr/share/themes/Yaru \
+        --share-net --die-with-parent "${@:-bash}"
+)
+
+# fakeroot bwrap
+#bwrap_fakeroot(){
+#    bwrap_user fakeroot "$@"
+#}
+
+# root bwrap
+bwrap_root()(
+    set -x
+    bwrap --bind "$ARCH_DIR" / \
+        --bind-try "$AUR_APP_DATA_DIR" "$HOME" \
+        --bind-try "$AUR_CACHE_DIR/pacman/pkg/" /var/cache/pacman/pkg/ \
+        --bind-try "$AUR_CACHE_DIR/_cache/" "$HOME/.cache" \
+        --ro-bind /etc/resolv.conf /etc/resolv.conf --ro-bind /etc/hosts /etc/hosts \
+        --dev-bind /dev /dev --dev-bind /proc /proc --dev-bind /sys /sys  --bind /tmp /tmp --dev-bind /run /run \
+        --ro-bind-try /usr/share/fonts/opentype/noto/ /usr/share/fonts/noto \
+        --ro-bind-try /usr/bin/snapctl /usr/bin/snapctl \
+        --ro-bind-try  /usr/share/themes/Yaru /usr/share/themes/Yaru \
+        --share-net --die-with-parent --uid 0 --gid 0 --unshare-user "${@:-bash}"
+)
+
+
+# sudo arch-chroot
+arch_chroot()(
+    set -x
+    sudo "$ARCH_DIR/usr/bin/arch-chroot" "$ARCH_DIR" "$@"
+)
+
+# list commands
+help(){
+    echo commands：
+    declare -F | grep -oP ' [a-z]+.*' | sort
+}
+
+# interactive cmd
+_cmd_main()(
+    if [ -n "$1" ] ; then
+        if [ "$(type -t $1)" = function ] ; then
+            "$@"
+            exit
+        elif bwrap_user which "$1" ; then
+            bwrap_user "$@"
+            exit
+        else
+            echo "command not found."
+            help
+            exit
+        fi
+    fi
+    while read -e -p 'aur> ' CMD ; do
+        if [ "$CMD" = q -o "$CMD" = quit ] ; then
+            exit
+        elif [ "$(type -t ${CMD/ */})" = function ] ; then
+            $CMD
+        elif bwrap_user which "${CMD/ */}" ; then
+            bwrap_user $CMD
+            continue
+        else
+            echo "command not found."
+            help
+        fi
+    done
+)
+
+_cmd_main "$@"
