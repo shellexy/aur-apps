@@ -26,7 +26,7 @@ Use AUR (Arch User Repository) on Ubuntu Linux
     aur-apps upgrade_self           # upgrade this tool
 
 
-# example
+# Example
 
     aur-apps search notepad
     aur-apps install notepadqq
